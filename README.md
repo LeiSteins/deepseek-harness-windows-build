@@ -40,6 +40,10 @@ The workflow runs DeepSeek Harness's official unsigned packaging command:
 pnpm run package:desktop:win:x64:unsigned
 ```
 
+For current upstream versions, the workflow derives the required
+`apps/desktop/.env.windows` file from the public upstream example and replaces
+only the application ID. Signing and upload credential fields remain empty.
+
 See the upstream
 [Desktop documentation](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md)
 for packaging details and requirements.
