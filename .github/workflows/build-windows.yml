@@ -16,6 +16,10 @@ concurrency:
 env:
   DSH_DESKTOP_APP_ID: io.github.leisteins.deepseekharness
   DSH_TELEMETRY_DISABLED: "1"
+  # Rolling release that serves the update feed (nightly.yml) plus the installer
+  # and blockmap it references. Installed applications have this URL baked in,
+  # so the tag must stay stable.
+  DSH_WINDOWS_FEED_TAG: windows-feed
 
 jobs:
   resolve-release:
@@ -127,6 +131,7 @@ jobs:
       - name: Configure unsigned Windows packaging
         shell: pwsh
         run: |
+          $feedUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:DSH_WINDOWS_FEED_TAG/"
           $example = "apps/desktop/.env.windows.example"
           $configuration = "apps/desktop/.env.windows"
           if (Test-Path $example) {
@@ -136,9 +141,9 @@ jobs:
             Set-Content -Path $configuration -Value $contents -Encoding utf8NoBOM
           }
 
-          # Unsigned community builds have no packaged updater. Keep the
-          # environment required by upstream packaging validation, but do not
-          # embed its mandatory test-update policy in the installed app.
+          # Keep the environment required by upstream packaging validation, but
+          # do not embed its mandatory test-update policy: unsigned community
+          # builds must not point users at DeepSeek's own update service.
           $builderConfig = "apps/desktop/scripts/electron-builder-config.mjs"
           $builderContents = Get-Content -Raw $builderConfig
           $originalMetadata = 'extraMetadata: { dshDesktopAppId: appId, dshMandatoryUpdatePolicy: policy },'
@@ -147,11 +152,52 @@ jobs:
             throw "Upstream desktop metadata layout changed; refusing to build with an unverified policy patch."
           }
           $builderContents = $builderContents.Replace($originalMetadata, $unsignedMetadata)
+
+          # Upstream forces the ordinary updater off for --unsigned builds,
+          # which leaves the installer without resources/app-update.yml and makes
+          # packaged versions unable to detect updates. Point the unsigned build
+          # at this repository's rolling feed instead.
+          $originalPublish = "publish: update === undefined ? null : [{ provider: 'generic', url: update.publicUrl, channel: 'nightly' }],"
+          $updatedPublish = "publish: [{ provider: 'generic', url: '$feedUrl', channel: 'nightly' }],"
+          if (-not $builderContents.Contains($originalPublish)) {
+            throw "Upstream desktop publish layout changed; refusing to build with an unverified update feed patch."
+          }
+          $builderContents = $builderContents.Replace($originalPublish, $updatedPublish)
           Set-Content -Path $builderConfig -Value $builderContents -Encoding utf8NoBOM
+
+          Write-Output "Packaged update source: $feedUrl"
 
       - name: Build unsigned Windows installer
         shell: pwsh
         run: pnpm run package:desktop:win:x64:unsigned
+
+      - name: Verify packaged update source
+        shell: pwsh
+        run: |
+          $outputDirectory = "apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts"
+          $feedUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:DSH_WINDOWS_FEED_TAG/"
+
+          $feed = Join-Path $outputDirectory "nightly.yml"
+          if (-not (Test-Path $feed)) {
+            throw "electron-builder produced no nightly.yml; packaged versions would not detect updates."
+          }
+
+          $configs = @(Get-ChildItem -Path $outputDirectory -Recurse -Depth 3 -File -Filter "app-update.yml")
+          if ($configs.Count -ne 1) {
+            throw "Expected exactly one packaged app-update.yml, found $($configs.Count)."
+          }
+          $config = Get-Content -Raw $configs[0].FullName
+          if ($config -notmatch [regex]::Escape($feedUrl)) {
+            throw "Packaged update source does not point at $feedUrl."
+          }
+          if ($config -notmatch 'channel:\s*nightly') {
+            throw "Packaged update source is not on the nightly channel."
+          }
+
+          Write-Output "--- nightly.yml ---"
+          Get-Content $feed
+          Write-Output "--- $($configs[0].FullName) ---"
+          Get-Content $configs[0].FullName
 
       - name: Write build information
         env:
@@ -166,6 +212,7 @@ jobs:
             "Upstream tag: $env:UPSTREAM_RELEASE_TAG"
             "Upstream revision: ${{ steps.source.outputs.revision }}"
             "Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            "Update source: https://github.com/${{ github.repository }}/releases/download/${{ env.DSH_WINDOWS_FEED_TAG }}/"
             "Unsigned build: Windows may display a SmartScreen warning."
           ) | Set-Content -Encoding utf8 "$outputDirectory/BUILD-INFO.txt"
 
@@ -176,6 +223,7 @@ jobs:
           path: |
             apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64.exe
             apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64.exe.blockmap
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/nightly.yml
             apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/BUILD-INFO.txt
           if-no-files-found: error
           compression-level: 0
@@ -232,3 +280,57 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to upload installer to release $env:RELEASE_TAG."
           }
+
+      - name: Publish update feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $outputDirectory = "apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts"
+          $feedTag = $env:DSH_WINDOWS_FEED_TAG
+          $installers = @(
+            Get-ChildItem -Path $outputDirectory -File |
+              Where-Object { $_.Name -match '^deepseek-harness-.+-win-x64\.exe$' }
+          )
+          $blockmaps = @(
+            Get-ChildItem -Path $outputDirectory -File |
+              Where-Object { $_.Name -match '^deepseek-harness-.+-win-x64\.exe\.blockmap$' }
+          )
+          if ($installers.Count -ne 1 -or $blockmaps.Count -ne 1) {
+            throw "Expected one installer and one blockmap, found $($installers.Count) and $($blockmaps.Count)."
+          }
+          $feedFiles = @(
+            (Join-Path $outputDirectory "nightly.yml")
+            $installers[0].FullName
+            $blockmaps[0].FullName
+          )
+          $missing = @($feedFiles | Where-Object { -not (Test-Path $_) })
+          if ($missing.Count -ne 0) {
+            throw "Missing update feed files: $($missing -join ', ')."
+          }
+
+          # The updater resolves the installer and blockmap relative to
+          # nightly.yml, so all three assets must live in one release.
+          gh release view $feedTag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            $notes = @(
+              "Machine-managed update feed for the unsigned Windows x64 builds."
+              ""
+              "Installed applications read ``nightly.yml`` (and the installer and blockmap it references) from this release through the update source baked into their installer. Assets are replaced on every build; do not delete them."
+            ) -join "`n"
+            gh release create $feedTag `
+              --repo $env:GITHUB_REPOSITORY `
+              --title "Windows update feed" `
+              --notes $notes `
+              --prerelease
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create the update feed release $feedTag."
+            }
+          }
+
+          gh release upload $feedTag @feedFiles --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload the update feed to $feedTag."
+          }
+
+          Write-Output "Update feed published to https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$feedTag"
