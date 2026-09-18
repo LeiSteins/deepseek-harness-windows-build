@@ -6,28 +6,25 @@ with GitHub Actions.
 
 ## Download a build
 
-1. Open the repository's **Actions** tab.
-2. Select **Build DeepSeek Harness for Windows**.
-3. Open a successful workflow run.
-4. Download the `deepseek-harness-windows-x64-*` artifact at the bottom of the
-   run page.
-5. Extract the artifact and run the included installer.
+Open the repository's **Releases** page and download the `.exe` asset from the
+release matching the official DeepSeek Harness release name and tag.
 
-Artifacts are retained for 30 days. Each artifact contains only the NSIS
-installer, its blockmap, and `BUILD-INFO.txt` with the exact upstream commit
-used for the build. The large intermediate `win-unpacked` directory is not
-uploaded.
+Each successful build also keeps a workflow artifact for 30 days. It contains
+only the NSIS installer, its blockmap, and `BUILD-INFO.txt` with the exact
+upstream commit used for the build. The large intermediate `win-unpacked`
+directory is not uploaded.
 
-## Build a branch, tag, or commit
+## Automatic and manual builds
 
-Choose **Run workflow** in the Actions tab and enter one of the following in
-the `ref` field:
+The workflow runs every day at 00:00 Asia/Shanghai time. It reads the latest
+non-draft release from the official DeepSeek Harness repository and builds it
+only when this repository does not already contain a release with the same
+tag.
 
-- `master` for the latest development source;
-- a release tag such as `dsh-v0.1.6-alpha.2`;
-- a full upstream commit SHA for a reproducible build.
-
-The workflow also builds the latest upstream `master` branch every Monday.
+Choose **Run workflow** in the Actions tab to force a new build of the latest
+official DeepSeek Harness release. Manual builds use the same upstream release
+name and tag, and replace an existing installer asset with the newly built
+file.
 
 ## Important notice
 

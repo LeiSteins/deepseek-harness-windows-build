@@ -2,30 +2,79 @@ name: Build DeepSeek Harness for Windows
 
 on:
   workflow_dispatch:
-    inputs:
-      ref:
-        description: Upstream branch, tag, or commit SHA
-        required: true
-        default: master
-        type: string
   schedule:
-    # Build the latest upstream master every Monday at 03:17 UTC.
-    - cron: "17 3 * * 1"
+    # 00:00 Asia/Shanghai (16:00 UTC on the previous calendar day).
+    - cron: "0 16 * * *"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: windows-desktop-${{ github.ref }}
-  cancel-in-progress: true
+  group: windows-desktop-release
+  cancel-in-progress: false
 
 env:
   DSH_DESKTOP_APP_ID: io.github.leisteins.deepseekharness
   DSH_TELEMETRY_DISABLED: "1"
 
 jobs:
+  resolve-release:
+    name: Resolve latest upstream release
+    runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      should_build: ${{ steps.release.outputs.should_build }}
+      tag: ${{ steps.release.outputs.tag }}
+      title: ${{ steps.release.outputs.title }}
+
+    steps:
+      - name: Find latest DeepSeek Harness release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          release_json="$(gh api 'repos/deepseek-ai/deepseek-harness/releases?per_page=100')"
+          tag="$(jq -r 'map(select(.draft == false))[0].tag_name // empty' <<< "$release_json")"
+          title="$(jq -r 'map(select(.draft == false))[0].name // empty' <<< "$release_json")"
+          prerelease="$(jq -r 'map(select(.draft == false))[0].prerelease' <<< "$release_json")"
+
+          if [[ -z "$tag" ]]; then
+            echo "No published upstream release was found." >&2
+            exit 1
+          fi
+          if [[ -z "$title" ]]; then
+            title="$tag"
+          fi
+
+          release_complete=false
+          if local_release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" 2>/dev/null)"; then
+            if jq -e '.assets | any(.name; test("^deepseek-harness-.+-win-x64\\.exe$"))' \
+              <<< "$local_release" >/dev/null; then
+              release_complete=true
+            fi
+          fi
+
+          should_build=false
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "$release_complete" == "false" ]]; then
+            should_build=true
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "title=$title"
+            echo "prerelease=$prerelease"
+            echo "should_build=$should_build"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Latest upstream release: $title ($tag)"
+          echo "Matching local release has an installer: $release_complete"
+          echo "Build requested: $should_build"
+
   build:
     name: Windows x64 unsigned installer
+    needs: resolve-release
+    if: needs.resolve-release.outputs.should_build == 'true'
     runs-on: windows-2025
     timeout-minutes: 180
 
@@ -34,7 +83,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: ${{ inputs.ref || 'master' }}
+          ref: ${{ needs.resolve-release.outputs.tag }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -92,11 +141,16 @@ jobs:
         run: pnpm run package:desktop:win:x64:unsigned
 
       - name: Write build information
+        env:
+          UPSTREAM_RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
+          UPSTREAM_RELEASE_TITLE: ${{ needs.resolve-release.outputs.title }}
         shell: pwsh
         run: |
           $outputDirectory = "apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts"
           @(
             "Upstream repository: https://github.com/deepseek-ai/deepseek-harness"
+            "Upstream release: $env:UPSTREAM_RELEASE_TITLE"
+            "Upstream tag: $env:UPSTREAM_RELEASE_TAG"
             "Upstream revision: ${{ steps.source.outputs.revision }}"
             "Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             "Unsigned build: Windows may display a SmartScreen warning."
@@ -107,9 +161,61 @@ jobs:
         with:
           name: deepseek-harness-windows-x64-${{ steps.source.outputs.short_revision }}
           path: |
-            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe
-            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe.blockmap
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64.exe
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64.exe.blockmap
             apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/BUILD-INFO.txt
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+
+      - name: Publish installer to repository release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PRERELEASE: ${{ needs.resolve-release.outputs.prerelease }}
+          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
+          RELEASE_TITLE: ${{ needs.resolve-release.outputs.title }}
+        shell: pwsh
+        run: |
+          $outputDirectory = "apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts"
+          $installers = @(
+            Get-ChildItem -Path $outputDirectory -File |
+              Where-Object { $_.Name -match '^deepseek-harness-.+-win-x64\.exe$' }
+          )
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows installer, found $($installers.Count)."
+          }
+
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            $notes = @(
+              "Automated unsigned Windows x64 build of [DeepSeek Harness $env:RELEASE_TITLE](https://github.com/deepseek-ai/deepseek-harness/releases/tag/$env:RELEASE_TAG)."
+              ""
+              "Windows may display a Microsoft Defender SmartScreen warning because the installer is unsigned."
+            ) -join "`n"
+            $arguments = @(
+              "release", "create", $env:RELEASE_TAG,
+              "--repo", $env:GITHUB_REPOSITORY,
+              "--title", $env:RELEASE_TITLE,
+              "--notes", $notes
+            )
+            if ($env:RELEASE_PRERELEASE -eq "true") {
+              $arguments += "--prerelease"
+            }
+            & gh @arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create release $env:RELEASE_TAG."
+            }
+          } else {
+            gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY `
+              --title $env:RELEASE_TITLE `
+              "--prerelease=$($env:RELEASE_PRERELEASE)"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to synchronize release metadata for $env:RELEASE_TAG."
+            }
+          }
+
+          gh release upload $env:RELEASE_TAG $installers[0].FullName `
+            --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload installer to release $env:RELEASE_TAG."
+          }
