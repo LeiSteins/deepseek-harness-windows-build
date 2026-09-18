@@ -13,8 +13,10 @@ with GitHub Actions.
    run page.
 5. Extract the artifact and run the included installer.
 
-Artifacts are retained for 30 days. Each artifact includes `BUILD-INFO.txt`
-with the exact upstream commit used for the build.
+Artifacts are retained for 30 days. Each artifact contains only the NSIS
+installer, its blockmap, and `BUILD-INFO.txt` with the exact upstream commit
+used for the build. The large intermediate `win-unpacked` directory is not
+uploaded.
 
 ## Build a branch, tag, or commit
 
