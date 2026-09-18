@@ -136,6 +136,19 @@ jobs:
             Set-Content -Path $configuration -Value $contents -Encoding utf8NoBOM
           }
 
+          # Unsigned community builds have no packaged updater. Keep the
+          # environment required by upstream packaging validation, but do not
+          # embed its mandatory test-update policy in the installed app.
+          $builderConfig = "apps/desktop/scripts/electron-builder-config.mjs"
+          $builderContents = Get-Content -Raw $builderConfig
+          $originalMetadata = 'extraMetadata: { dshDesktopAppId: appId, dshMandatoryUpdatePolicy: policy },'
+          $unsignedMetadata = 'extraMetadata: { dshDesktopAppId: appId, ...(unsigned ? {} : { dshMandatoryUpdatePolicy: policy }) },'
+          if (-not $builderContents.Contains($originalMetadata)) {
+            throw "Upstream desktop metadata layout changed; refusing to build with an unverified policy patch."
+          }
+          $builderContents = $builderContents.Replace($originalMetadata, $unsignedMetadata)
+          Set-Content -Path $builderConfig -Value $builderContents -Encoding utf8NoBOM
+
       - name: Build unsigned Windows installer
         shell: pwsh
         run: pnpm run package:desktop:win:x64:unsigned
