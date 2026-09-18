@@ -1,0 +1,101 @@
+name: Build DeepSeek Harness for Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Upstream branch, tag, or commit SHA
+        required: true
+        default: master
+        type: string
+  schedule:
+    # Build the latest upstream master every Monday at 03:17 UTC.
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DSH_DESKTOP_APP_ID: io.github.leisteins.deepseekharness
+  DSH_TELEMETRY_DISABLED: "1"
+
+jobs:
+  build:
+    name: Windows x64 unsigned installer
+    runs-on: windows-2025
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out DeepSeek Harness
+        uses: actions/checkout@v6
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ inputs.ref || 'master' }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record source revision
+        id: source
+        shell: pwsh
+        run: |
+          $revision = git rev-parse HEAD
+          $shortRevision = git rev-parse --short=12 HEAD
+          "revision=$revision" >> $env:GITHUB_OUTPUT
+          "short_revision=$shortRevision" >> $env:GITHUB_OUTPUT
+          "Building upstream revision: $revision"
+
+      - name: Enable Windows development features
+        shell: pwsh
+        run: |
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" `
+            /t REG_DWORD /f /v "AllowDevelopmentWithoutDevLicense" /d "1"
+          git config --global core.longpaths true
+
+      # The upstream packageManager field selects the matching pnpm version.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Python for native modules
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Build unsigned Windows installer
+        shell: pwsh
+        run: pnpm run package:desktop:win:x64:unsigned
+
+      - name: Write build information
+        shell: pwsh
+        run: |
+          $outputDirectory = "apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts"
+          @(
+            "Upstream repository: https://github.com/deepseek-ai/deepseek-harness"
+            "Upstream revision: ${{ steps.source.outputs.revision }}"
+            "Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            "Unsigned build: Windows may display a SmartScreen warning."
+          ) | Set-Content -Encoding utf8 "$outputDirectory/BUILD-INFO.txt"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-windows-x64-${{ steps.source.outputs.short_revision }}
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
