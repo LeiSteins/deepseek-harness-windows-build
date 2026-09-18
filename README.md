@@ -61,9 +61,12 @@ so strands existing installations. To move the feed elsewhere, change
 keeps the old URL alive.
 
 Applications check at startup and then roughly every 10 minutes; the update
-state is shown in **Settings → General**. `DSH_DESKTOP_UPDATE_CHECK_INTERVAL_MS`,
+state appears beside the account button in the sidebar while the sidebar is
+wide enough to show it. `DSH_DESKTOP_UPDATE_CHECK_INTERVAL_MS`,
 `DSH_DESKTOP_UPDATE_CHECK_MAX_BACKOFF_MS`, and `DSH_DESKTOP_UPDATE_CHECK_JITTER`
-tune that schedule.
+tune that schedule. An idle check renders nothing at all, so a working feed with
+no newer version looks the same as an application that never checks — only a
+failure or an available version is visible.
 
 ### Updating an older installation
 
