@@ -1,36 +1,58 @@
-# DeepSeek Harness Windows Builds
+# DeepSeek Harness Windows 客户端封装
 
-This repository builds the Windows x64 desktop application from the official
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) source code
-with GitHub Actions.
+本项目基于 [DeepSeek Harness 官方客户端源码](https://github.com/deepseek-ai/deepseek-harness)，将其封装为可直接安装使用的 **Windows x64 桌面客户端**。
 
-## Download a build
+**下载 `.exe` 安装包即可安装，无需额外安装 Node.js、pnpm 等运行或构建依赖，也无需自行下载源码、配置开发环境。** 安装包包含客户端运行所需的环境，构建过程由 GitHub Actions 自动完成。
 
-Open the repository's **Releases** page and download the `.exe` asset from the
-release matching the official DeepSeek Harness release name and tag.
+本仓库为独立维护的 Windows 打包项目，使用官方客户端源码构建，非 DeepSeek 官方发布渠道。
 
-Each successful build also keeps a workflow artifact for 30 days. It contains
-only the NSIS installer, its blockmap, and `BUILD-INFO.txt` with the exact
-upstream commit used for the build. The large intermediate `win-unpacked`
-directory is not uploaded.
+## 下载与安装
 
-## Automatic and manual builds
+1. 打开 [最新构建下载页面](https://github.com/LeiSteins/deepseek-harness-windows-build/releases/tag/windows-feed)。
+2. 在页面的 **Assets** 中下载 `deepseek-harness-<version>-win-x64-unsigned.exe` 安装包。
+3. 运行安装包，按提示完成安装，然后启动 DeepSeek Harness。
 
-The workflow runs every day at 00:00 Asia/Shanghai time. It reads the latest
-non-draft release from the official DeepSeek Harness repository and builds it
-only when this repository does not already contain a release with the same
-tag.
+上游项目处于早期开发阶段，版本会持续以 **Pre-release（预发布）** 状态发布。上述链接固定指向随构建更新的 `windows-feed` 页面，不依赖 Latest 正式版入口。如需指定版本或历史版本，请查看 [全部版本（含预发布）](https://github.com/LeiSteins/deepseek-harness-windows-build/releases)。
 
-Choose **Run workflow** in the Actions tab to force a new build of the latest
-official DeepSeek Harness release. Manual builds use the same upstream release
-name and tag, and replace an existing installer asset with the newly built
-file.
+日常安装只需下载 `.exe` 文件，无需下载源码、`.blockmap` 或 `nightly.yml`。安装包不包含 API Key 或用户凭据，使用时按客户端提示完成所需配置。
 
-## Automatic updates
+安装包尚未进行代码签名，Windows 可能显示 Microsoft Defender SmartScreen 提示。
 
-Each installer built here carries an update source in
-`resources/app-update.yml`, so an installed application can detect newer
-builds, download them, and install them after a confirmation:
+## 自动更新
+
+客户端内置指向本仓库的更新源。检测到新版本后，可下载更新，并在确认后安装。
+
+客户端会在启动时检查更新，之后大约每 10 分钟检查一次。侧边栏宽度足够时，更新状态会显示在账户按钮旁；没有新版本且检查正常时，不显示状态提示。
+
+更新由本仓库的 `windows-feed` Release 提供，不使用 DeepSeek 官方更新服务。
+
+### 旧版本升级
+
+更新源启用前构建的版本（`0.1.6-alpha.2` 及更早版本）不包含 `app-update.yml`，无法自动更新。请从 [最新构建下载页面](https://github.com/LeiSteins/deepseek-harness-windows-build/releases/tag/windows-feed) 下载新版安装包并安装，后续即可使用内置更新功能。
+
+## 版本同步与构建
+
+GitHub Actions 每天北京时间（UTC+8）00:00 检查官方仓库最新的非草稿 Release。如果本仓库尚无对应版本的安装包，就自动构建并发布，沿用官方版本名称和标签。
+
+维护者也可以在 Actions 页面选择 **Run workflow**，手动重新构建最新官方版本。手动构建会替换对应 Release 中已有的安装包。
+
+每次成功构建还会保留 30 天的工作流产物，包括 NSIS 安装包、差分下载所需的 `.blockmap`、更新清单 `nightly.yml`，以及记录上游源码提交的 `BUILD-INFO.txt`。体积较大的中间目录 `win-unpacked` 不会上传。
+
+## 构建与更新源维护
+
+以下内容供维护构建流程时参考，普通用户直接下载安装包即可。
+
+工作流使用官方提供的 Windows x64 无签名打包命令：
+
+```text
+pnpm run package:desktop:win:x64:unsigned
+```
+
+构建时根据上游公开示例生成 `apps/desktop/.env.windows`，仅替换应用 ID，签名及上传凭据字段保持为空。构建环境所需的 Node.js、pnpm 等依赖由工作流配置，不需要用户在本机安装。
+
+### 更新源配置
+
+安装包的 `resources/app-update.yml` 中包含以下更新源：
 
 ```yaml
 provider: generic
@@ -38,74 +60,20 @@ url: https://github.com/LeiSteins/deepseek-harness-windows-build/releases/downlo
 channel: nightly
 ```
 
-Upstream disables its packaged updater for `--unsigned` builds, so the workflow
-patches `apps/desktop/scripts/electron-builder-config.mjs` to keep a generic
-publish target pointed at this repository instead. The build then fails loudly
-unless electron-builder produced `nightly.yml` **and** the packaged application
-contains a matching `app-update.yml`.
+上游默认关闭 `--unsigned` 构建的更新功能，因此工作流会调整 `apps/desktop/scripts/electron-builder-config.mjs`，保留指向本仓库的 generic 发布配置。构建会校验是否生成 `nightly.yml`，以及打包后的应用是否包含匹配的 `app-update.yml`；缺少任一项都会导致构建失败。
 
-Every build publishes three assets to the rolling `windows-feed` release
-(marked as a prerelease so it never becomes the repository's "Latest"):
+每次构建会将以下三个文件发布到滚动更新的 `windows-feed` Release。该 Release 标记为预发布，避免成为仓库的 Latest 版本。
 
-| Asset | Purpose |
+| 文件 | 用途 |
 | --- | --- |
-| `nightly.yml` | Feed read by installed applications |
-| `deepseek-harness-<version>-win-x64.exe` | Installer offered to updating clients |
-| `deepseek-harness-<version>-win-x64.exe.blockmap` | Differential download support |
+| `nightly.yml` | 客户端读取的更新清单 |
+| `deepseek-harness-<version>-win-x64-unsigned.exe` | 更新所用的无签名安装包 |
+| `deepseek-harness-<version>-win-x64-unsigned.exe.blockmap` | 支持差分下载 |
 
-The updater resolves the installer and blockmap relative to `nightly.yml`, so
-all three assets must stay in that one release. The URL is baked into every
-installer, which means **the feed tag must not be renamed or deleted** — doing
-so strands existing installations. To move the feed elsewhere, change
-`DSH_WINDOWS_FEED_TAG` in the workflow and publish one transitional release that
-keeps the old URL alive.
+以上为当前版本的文件命名；早期版本可能不带 `-unsigned` 后缀，下载时以对应 Release 中的实际文件名为准。
 
-Applications check at startup and then roughly every 10 minutes; the update
-state appears beside the account button in the sidebar while the sidebar is
-wide enough to show it. `DSH_DESKTOP_UPDATE_CHECK_INTERVAL_MS`,
-`DSH_DESKTOP_UPDATE_CHECK_MAX_BACKOFF_MS`, and `DSH_DESKTOP_UPDATE_CHECK_JITTER`
-tune that schedule. An idle check renders nothing at all, so a working feed with
-no newer version looks the same as an application that never checks — only a
-failure or an available version is visible.
+更新器根据 `nightly.yml` 的相对路径查找安装包和 `.blockmap`，三个文件必须保留在同一个 Release 中。**不要重命名或删除 `windows-feed` 标签**，因为已安装客户端的更新地址已固定。若需迁移更新源，应修改工作流中的 `DSH_WINDOWS_FEED_TAG`，并发布保留旧地址可用的过渡版本。
 
-### Updating an older installation
+更新检查周期可通过 `DSH_DESKTOP_UPDATE_CHECK_INTERVAL_MS`、`DSH_DESKTOP_UPDATE_CHECK_MAX_BACKOFF_MS` 和 `DSH_DESKTOP_UPDATE_CHECK_JITTER` 调整。
 
-Builds made before the feed existed (0.1.6-alpha.2 and earlier) contain no
-`app-update.yml` and therefore cannot update themselves. Either install a newer
-build once, or add the update source to the existing installation and restart
-the application:
-
-```powershell
-$resources = Join-Path $env:LOCALAPPDATA 'Programs\DeepSeek Harness\resources'
-@'
-provider: generic
-url: https://github.com/LeiSteins/deepseek-harness-windows-build/releases/download/windows-feed/
-channel: nightly
-updaterCacheDirName: "@deepseek-aidsh-desktop-updater"
-'@ | Set-Content -Path (Join-Path $resources 'app-update.yml') -Encoding utf8NoBOM
-```
-
-The feed only advertises versions above the installed one, so this is safe to
-add to any installation that already has a feed-less build.
-
-## Important notice
-
-The generated installer is unsigned. Windows may show a Microsoft Defender
-SmartScreen warning. This repository is an independent build helper and is not
-an official DeepSeek distribution. No API key or user credential is embedded
-in the installer. The built-in updater points at this repository's own
-`windows-feed` release, never at a DeepSeek update service.
-
-The workflow runs DeepSeek Harness's official unsigned packaging command:
-
-```text
-pnpm run package:desktop:win:x64:unsigned
-```
-
-For current upstream versions, the workflow derives the required
-`apps/desktop/.env.windows` file from the public upstream example and replaces
-only the application ID. Signing and upload credential fields remain empty.
-
-See the upstream
-[Desktop documentation](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md)
-for packaging details and requirements.
+更多打包细节请参阅上游的 [桌面客户端文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md)。
