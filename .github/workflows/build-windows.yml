@@ -81,6 +81,9 @@ jobs:
     if: needs.resolve-release.outputs.should_build == 'true'
     runs-on: windows-2025
     timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: 'C:\dsh'
 
     steps:
       - name: Check out DeepSeek Harness
@@ -90,6 +93,24 @@ jobs:
           ref: ${{ needs.resolve-release.outputs.tag }}
           fetch-depth: 1
           persist-credentials: false
+
+      # Use a physical short path: Node realpath can expand a subst drive back
+      # to the original long workspace path before loading native Python modules.
+      - name: Prepare short Windows build directory
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          if (Test-Path 'C:\dsh') {
+            throw "C:\dsh already exists; refusing to overwrite it."
+          }
+          robocopy "$env:GITHUB_WORKSPACE" 'C:\dsh' /E /SL /XJ /R:2 /W:1 /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8 -or -not (Test-Path 'C:\dsh\package.json')) {
+            throw "Failed to copy the checkout to C:\dsh."
+          }
+          git config --global --add safe.directory C:/dsh
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to register the short checkout path with Git."
+          }
 
       - name: Record source revision
         id: source
@@ -239,12 +260,12 @@ jobs:
         with:
           name: deepseek-harness-windows-x64-${{ steps.source.outputs.short_revision }}
           path: |
-            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64.exe
-            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64.exe.blockmap
-            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe
-            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe.blockmap
-            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/nightly.yml
-            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/BUILD-INFO.txt
+            C:/dsh/apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64.exe
+            C:/dsh/apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64.exe.blockmap
+            C:/dsh/apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe
+            C:/dsh/apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe.blockmap
+            C:/dsh/apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/nightly.yml
+            C:/dsh/apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/BUILD-INFO.txt
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
