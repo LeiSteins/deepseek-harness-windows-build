@@ -53,7 +53,7 @@ jobs:
 
           release_complete=false
           if local_release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" 2>/dev/null)"; then
-            if jq -e '.assets | any(.name; test("^deepseek-harness-.+-win-x64\\.exe$"))' \
+            if jq -e '.assets | any(.name; test("^deepseek-harness-.+-win-x64(-unsigned)?\\.exe$"))' \
               <<< "$local_release" >/dev/null; then
               release_complete=true
             fi
@@ -146,12 +146,14 @@ jobs:
           # builds must not point users at DeepSeek's own update service.
           $builderConfig = "apps/desktop/scripts/electron-builder-config.mjs"
           $builderContents = Get-Content -Raw $builderConfig
-          $originalMetadata = 'extraMetadata: { dshDesktopAppId: appId, dshMandatoryUpdatePolicy: policy },'
-          $unsignedMetadata = 'extraMetadata: { dshDesktopAppId: appId, ...(unsigned ? {} : { dshMandatoryUpdatePolicy: policy }) },'
-          if (-not $builderContents.Contains($originalMetadata)) {
+          # Patch only the policy property, preserving upstream version/commit metadata.
+          # Accept both the older inline object and the newer multiline object.
+          $policyProperty = [regex]'\bdshMandatoryUpdatePolicy\s*:\s*policy\b(?=\s*[,}])'
+          $unsignedPolicy = '...(unsigned ? {} : { dshMandatoryUpdatePolicy: policy })'
+          if ($policyProperty.Matches($builderContents).Count -ne 1) {
             throw "Upstream desktop metadata layout changed; refusing to build with an unverified policy patch."
           }
-          $builderContents = $builderContents.Replace($originalMetadata, $unsignedMetadata)
+          $builderContents = $policyProperty.Replace($builderContents, $unsignedPolicy, 1)
 
           # Upstream forces the ordinary updater off for --unsigned builds,
           # which leaves the installer without resources/app-update.yml and makes
@@ -223,6 +225,8 @@ jobs:
           path: |
             apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64.exe
             apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64.exe.blockmap
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe.blockmap
             apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/nightly.yml
             apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/BUILD-INFO.txt
           if-no-files-found: error
@@ -240,7 +244,7 @@ jobs:
           $outputDirectory = "apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts"
           $installers = @(
             Get-ChildItem -Path $outputDirectory -File |
-              Where-Object { $_.Name -match '^deepseek-harness-.+-win-x64\.exe$' }
+              Where-Object { $_.Name -match '^deepseek-harness-.+-win-x64(-unsigned)?\.exe$' }
           )
           if ($installers.Count -ne 1) {
             throw "Expected exactly one Windows installer, found $($installers.Count)."
@@ -290,11 +294,11 @@ jobs:
           $feedTag = $env:DSH_WINDOWS_FEED_TAG
           $installers = @(
             Get-ChildItem -Path $outputDirectory -File |
-              Where-Object { $_.Name -match '^deepseek-harness-.+-win-x64\.exe$' }
+              Where-Object { $_.Name -match '^deepseek-harness-.+-win-x64(-unsigned)?\.exe$' }
           )
           $blockmaps = @(
             Get-ChildItem -Path $outputDirectory -File |
-              Where-Object { $_.Name -match '^deepseek-harness-.+-win-x64\.exe\.blockmap$' }
+              Where-Object { $_.Name -match '^deepseek-harness-.+-win-x64(-unsigned)?\.exe\.blockmap$' }
           )
           if ($installers.Count -ne 1 -or $blockmaps.Count -ne 1) {
             throw "Expected one installer and one blockmap, found $($installers.Count) and $($blockmaps.Count)."
