@@ -141,11 +141,27 @@ jobs:
             Set-Content -Path $configuration -Value $contents -Encoding utf8NoBOM
           }
 
-          # Keep the environment required by upstream packaging validation, but
-          # do not embed its mandatory test-update policy: unsigned community
-          # builds must not point users at DeepSeek's own update service.
+          # Unsigned community builds use this repository's updater and do not
+          # require the official mandatory-update service. Keep signed validation.
+          $packageEnvironment = "apps/desktop/scripts/desktop-package-environment.mjs"
+          $environmentContents = Get-Content -Raw $packageEnvironment
+          $policyValidation = [regex]'(?m)^(\s*)resolveDesktopPolicyEnvironment\(environment\)\s*$'
+          if ($policyValidation.Matches($environmentContents).Count -ne 1) {
+            throw "Upstream desktop policy validation changed; refusing to apply an unverified patch."
+          }
+          $environmentContents = $policyValidation.Replace($environmentContents, `
+            '${1}if (!options.unsigned) resolveDesktopPolicyEnvironment(environment)', 1)
+          Set-Content -Path $packageEnvironment -Value $environmentContents -Encoding utf8NoBOM
+
           $builderConfig = "apps/desktop/scripts/electron-builder-config.mjs"
           $builderContents = Get-Content -Raw $builderConfig
+          # The upstream unsigned variable is declared later, so inspect env here.
+          $policyResolution = [regex]'\bconst policy = resolveDesktopPolicyEnvironment\(env\)'
+          if ($policyResolution.Matches($builderContents).Count -ne 1) {
+            throw "Upstream desktop policy resolution changed; refusing to apply an unverified patch."
+          }
+          $builderContents = $policyResolution.Replace($builderContents, `
+            "const policy = env.DSH_DESKTOP_UNSIGNED === '1' ? undefined : resolveDesktopPolicyEnvironment(env)", 1)
           # Patch only the policy property, preserving upstream version/commit metadata.
           # Accept both the older inline object and the newer multiline object.
           $policyProperty = [regex]'\bdshMandatoryUpdatePolicy\s*:\s*policy\b(?=\s*[,}])'
