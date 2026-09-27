@@ -133,6 +133,30 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
 
+      # setup-node runs in the original D: workspace; build commands run on C:.
+      - name: Configure shared pnpm store
+        shell: pwsh
+        run: |
+          pnpm config set --global store-dir C:/pnpm-store
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to configure the shared pnpm store."
+          }
+          $buildStore = (pnpm store path --silent | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $buildStore) {
+            throw "Failed to resolve the build pnpm store."
+          }
+          Push-Location $env:GITHUB_WORKSPACE
+          try {
+            $cacheStore = (pnpm store path --silent | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $cacheStore -ne $buildStore) {
+              throw "Build and cache pnpm stores differ: $buildStore / $cacheStore"
+            }
+          } finally {
+            Pop-Location
+          }
+          New-Item -ItemType Directory -Path $buildStore -Force | Out-Null
+          Write-Output "Shared pnpm store: $buildStore"
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
