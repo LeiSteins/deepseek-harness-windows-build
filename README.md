@@ -72,6 +72,8 @@ channel: nightly
 
 以上为当前版本的文件命名；早期版本可能不带 `-unsigned` 后缀，下载时以对应 Release 中的实际文件名为准。
 
+发布时先上传新版本安装包和 `.blockmap`，再更新 `nightly.yml`。全部上传成功后，自动删除 `windows-feed` 中旧版本的 Windows x64 安装包及 `.blockmap`，仅保留当前构建的更新文件。按版本标签发布的历史 Release 不受影响。
+
 更新器根据 `nightly.yml` 的相对路径查找安装包和 `.blockmap`，三个文件必须保留在同一个 Release 中。**不要重命名或删除 `windows-feed` 标签**，因为已安装客户端的更新地址已固定。若需迁移更新源，应修改工作流中的 `DSH_WINDOWS_FEED_TAG`，并发布保留旧地址可用的过渡版本。
 
 更新检查周期可通过 `DSH_DESKTOP_UPDATE_CHECK_INTERVAL_MS`、`DSH_DESKTOP_UPDATE_CHECK_MAX_BACKOFF_MS` 和 `DSH_DESKTOP_UPDATE_CHECK_JITTER` 调整。

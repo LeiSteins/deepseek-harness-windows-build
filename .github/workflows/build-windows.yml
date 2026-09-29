@@ -393,9 +393,40 @@ jobs:
             }
           }
 
-          gh release upload $feedTag @feedFiles --repo $env:GITHUB_REPOSITORY --clobber
+          # Publish the payload before switching the manifest to the new version.
+          gh release upload $feedTag $installers[0].FullName $blockmaps[0].FullName `
+            --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload the update payload to $feedTag."
+          }
+          gh release upload $feedTag $feedFiles[0] --repo $env:GITHUB_REPOSITORY --clobber
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to upload the update feed to $feedTag."
+          }
+
+          # Only prune old Windows payloads after the new feed is published.
+          # Versioned releases remain available for historical downloads.
+          $releaseId = gh release view $feedTag --repo $env:GITHUB_REPOSITORY --json databaseId --jq '.databaseId'
+          if ($LASTEXITCODE -ne 0 -or -not $releaseId) {
+            throw "Failed to resolve the update feed release ID."
+          }
+          $assetJson = gh api --paginate --slurp "repos/$env:GITHUB_REPOSITORY/releases/$releaseId/assets?per_page=100"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to list update feed assets."
+          }
+          $currentNames = @($installers[0].Name, $blockmaps[0].Name)
+          $assetPages = ($assetJson -join "`n") | ConvertFrom-Json
+          foreach ($page in $assetPages) {
+            foreach ($asset in $page) {
+              if ($asset.name -match '^deepseek-harness-.+-win-x64(-unsigned)?\.exe(\.blockmap)?$' -and
+                  $asset.name -notin $currentNames) {
+                gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)"
+                if ($LASTEXITCODE -ne 0) {
+                  throw "Failed to delete old update feed asset $($asset.name)."
+                }
+                Write-Output "Deleted old update feed asset: $($asset.name)"
+              }
+            }
           }
 
           Write-Output "Update feed published to https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$feedTag"
